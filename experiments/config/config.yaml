@@ -1,0 +1,15 @@
+data:
+  folder: data
+  file: equitypledge.csv
+  results: results
+  target_column: IsDefault
+
+other:
+  mlflow_tags: lower coeff cap
+  create_eda_report: False
+
+quest:
+  params:
+    coeff_cap: 0.059
+    max_features: 200
+
