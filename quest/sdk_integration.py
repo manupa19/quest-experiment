@@ -101,14 +101,14 @@ class QAOAQiskitSolver(AbstractSolver):
     def run(self):
         options = Options(**self.sampler_options)
         options.transpilation.skip_transpilation = True
-        with Session(service=self.service,
+        with Session(service=self.service, #within that session (with the IBM Quantum runtime environment)
                      backend=self.backend):
             # _logger.info(f"Number of Gates: {self.circuit_gates}")
             # _logger.info(f"Depth of Circuit: {self.circuit_depth}")
             # _logger.info(f"Number of Qubits of Backend: {self.circuit_width}")
             _logger.info(f"Backend: {self.backend}")
 
-            sampler = Sampler(options=options)
+            sampler = Sampler(options=options) #a class from Qiskit Runtime that is used to run quantum circuits and return measurement probabilities, basically a backend runner
             self.ansatz_isa, isa_hamiltonian = self.isa_circuit()
             svqe = SamplingVQE(sampler, self.ansatz_isa, optimizer=self.optimizer)
             result = svqe.compute_minimum_eigenvalue(isa_hamiltonian)
@@ -128,10 +128,18 @@ class CplexSolver(AbstractSolver):
 
     def circuit(self):
         pass
-
+        
     def run(self):
+        print("Starting CPLEX solve...", flush=True)
         cplex = CplexOptimizer()
-        return cplex.solve(self.qp)
+
+        result = cplex.solve(self.qp)
+        print("CPLEX solve finished.", flush=True)
+        return result
+
+    # def run(self):
+    #     cplex = CplexOptimizer()
+    #     return cplex.solve(self.qp)
 
 
 class AerSolver(QAOAQiskitSolver):

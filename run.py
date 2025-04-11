@@ -68,16 +68,17 @@ def main(experiment_name: str, run_name: str):
             pipe = pipeline(data=X_train, classifier=RFE(RandomForestClassifier(), verbose=True, step=5))
             pipe.fit(X_train, y_train)
             evaluate_model(pipe, X_test, y_test)
+      
 
-        with mlflow.start_run(run_name='Quest', nested=True):
+        with mlflow.start_run(run_name='QUEST', nested=True):
 
             pipe = pipeline(data=X_train, classifier=RandomForestClassifier(),
-                             step=('feature selection', QUESTInspired(**config.get_quest_params)))
+                           step=('feature selection', QUESTInspired(**config.get_quest_params)))
             pipe.fit(X_train, y_train)
             evaluate_model(pipe, X_test, y_test)
             mlflow.log_params(config.get_quest_params)
 
-        # mlflow.log_artifact(local_path=logger_object.log_filepath, artifact_path="log")
+        mlflow.log_artifact(local_path=logger_object.log_filepath, artifact_path="log")
 
 
 if __name__ == "__main__":

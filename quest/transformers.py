@@ -30,19 +30,21 @@ class QuboPreprocessor(BaseEstimator, TransformerMixin):
         """
         return [col.split("__")[1] for col in self.transformer_.get_feature_names_out()]
 
-    def fit(self, X: np.array):
+    def fit(self, X: np.array): # is learning how to preprocess X.
         """
         Here, fitting means binning numeric data and one-hot-encoding categorical data.
 
         Args:
             X: array to be transformed
         """
-        self.transformer_ = make_column_transformer(
+        self.transformer_ = make_column_transformer( #creates a scikit-learn ColumnTransformer — it knows how to process different columns in different ways
                         (KBinsDiscretizer(n_bins=self.quantiles, encode='onehot-dense',  strategy='quantile'),
                          make_column_selector(dtype_include=np.number)),
                         (OneHotEncoder(sparse_output=False,  handle_unknown="infrequent_if_exist"),
                          make_column_selector(dtype_include=[object, 'category']))
-        ).fit(X)
+        ).fit(X)  #trains that transformer: it learns:
+#how to split your numeric columns into quantile bins
+#what categories exist in your categorical columns
 
         return self
 
@@ -59,10 +61,64 @@ class QuboPreprocessor(BaseEstimator, TransformerMixin):
 
 class QuboTransformer(BaseEstimator, TransformerMixin):
 
-    def __init__(self, coeff_cap: float = 1/2, max_features: int = 100):
+    def __init__(self, coeff_cap: float = 2, max_features: int = 100, scoring_method: str = 'correlation'):
         self.coeff_cap = coeff_cap
         self.max_features = max_features
+        self.scoring_method = scoring_method  # 'iv' or 'correlation'
 
+
+    @staticmethod
+    def calculate_iv(feature: pd.Series, label: pd.Series) -> float:
+        df = pd.DataFrame({'feature': feature, 'label': label})
+        total_good = (label == 0).sum()
+        total_bad = (label == 1).sum()
+
+        iv=0
+        eps = 1e-6
+        
+        for val, group in df.groupby('feature'):
+            good = (group['label'] == 0).sum()
+            bad = (group['label'] == 1).sum()
+
+            dist_good = good/total_good if total_good > 0 else eps
+            dist_bad = bad/total_bad if total_bad > 0 else eps
+
+            if dist_good == 0 or dist_bad == 0:
+                continue
+
+            woe = np.log(dist_good / dist_bad)
+            iv += (dist_good - dist_bad) * woe
+
+        return iv
+            
+            
+    
+    def _data_to_iv(self, features: np.ndarray, labels: np.ndarray) -> (pd.DataFrame, pd.DataFrame):
+        if not isinstance(labels, pd.DataFrame):
+             data = pd.DataFrame(features)
+        else:
+            data = features
+        data_label = data.copy()
+        if isinstance(labels, pd.DataFrame) or isinstance(labels, pd.Series):
+            data_label['label'] = labels.values
+        else:
+            data_label['label'] = labels
+            
+        iv_scores = {}
+        for col in data_label.columns:
+            if col == 'label':
+                continue
+            iv = self.calculate_iv(data_label[col], data_label['label'])
+            iv_scores[col] = iv
+
+        iv_series = pd.Series(iv_scores).sort_values(ascending = False).dropna()
+        iv_series = iv_series[:self.max_features]
+
+        self.pre_selected_features = iv_series.index
+        corr_features = data.loc[:, self.pre_selected_features].corr()
+        
+        return iv_series, corr_features
+            
     def _data_to_corr(self, features: np.ndarray, labels: np.ndarray) -> (pd.DataFrame, pd.DataFrame):
 
         # data = pd.get_dummies(features)
@@ -80,7 +136,7 @@ class QuboTransformer(BaseEstimator, TransformerMixin):
 
         corr_to_target = pd.DataFrame(
             data_label.corr()['label'].abs().sort_values(ascending=False).drop(['label'])[:self.max_features]
-        )
+)
         # na_index = corr_to_target.loc[corr_to_target.label.isna()].index
 
         corr_to_target = corr_to_target.dropna()
@@ -90,29 +146,38 @@ class QuboTransformer(BaseEstimator, TransformerMixin):
         return corr_to_target, corr_features
 
     @staticmethod
-    def _q_to_qp(corr_to_target: pd.DataFrame, corr_features: pd.DataFrame, coeff_cap: float = 1/2) -> QuadraticProgram:
+    def _q_to_qp(feature_scores: pd.DataFrame, corr_features : pd.DataFrame, coeff_cap: float = 2) -> QuadraticProgram:
+        print("Feature scores:")
+        print(feature_scores)
+        print("Correlation matrix:")
+        print(corr_features)
+
+        print("Number of features:", len(feature_scores))
+        print("Quadratic matrix shape:", corr_features.shape)
+
         # -- Overall Params
         qp_name = 'QUEST'
 
         # --------------
         var_selected = []
-        var_tot = [var for i, var in zip(range(len(corr_to_target.index)), corr_to_target.index)]
+        var_tot = [var for i, var in zip(range(len(feature_scores.index)), feature_scores.index)]
 
-        def corr_target_func(field_i):
-            return round(corr_to_target.loc[field_i].values[0], 6)
+        def feature_score_func(field_i):
+            val = feature_scores.loc[field_i]
+            return round(val.values[0], 6) if isinstance(val, pd.Series) else round(val, 6)
 
         def corr_func(field_i, field_j):
             return round(corr_features.loc[field_i, field_j], 6)
 
         def index_to_field(i):
-            return corr_to_target.index[i]
+            return feature_scores.index[i]
 
         # Define the qp (quadratic problem)
         qp = QuadraticProgram(qp_name)
         for i in range(len(var_tot)):
             qp.binary_var(name="a" + str(i))  # these are the a_i
-        linear_terms = {"a" + str(i): abs(corr_target_func(i_field)) for i, i_field in
-                        zip(range(len(var_tot)), var_tot)}
+        linear_terms = {"a" + str(i): abs(feature_score_func(i_field)) for i, i_field in
+                        zip(range(len(var_tot)), var_tot)} #abs is not needed for iv but it won't cause any problems and is needed for correlation so it must be here
 
         # Note that we apply here the abs(...) of the correlation among featuers.
         quadratic_terms = {("a" + str(i), "a" + str(j)):
@@ -126,100 +191,15 @@ class QuboTransformer(BaseEstimator, TransformerMixin):
         return qp
 
     def fit(self, X, y=None):
-
-        corr_to_target, corr_features = self._data_to_corr(features=X, labels=y)
-
-        self.qp_ = self._q_to_qp(corr_to_target=corr_to_target, corr_features=corr_features, coeff_cap=self.coeff_cap)
+        if self.scoring_method == 'correlation':
+            corr_to_target, corr_features = self._data_to_corr(features=X, labels=y)
+            self.qp_ = self._q_to_qp(feature_scores=corr_to_target, corr_features=corr_features, coeff_cap=self.coeff_cap)
+        else:
+            iv_to_target, corr_features = self._data_to_iv(features=X, labels=y)
+            self.qp_ = self._q_to_qp(feature_scores=iv_to_target, corr_features=corr_features, coeff_cap=self.coeff_cap)
 
         return self
 
     def transform(self, X):
         check_is_fitted(self)
         return self.qp_
-
-#
-# class QuboTransformer(BaseEstimator, TransformerMixin):
-#
-#     def __init__(self,
-#                  alpha: int = 10,
-#                  beta: int = 1000,
-#                  k: int = 5,
-#                  shots: int = 10000):
-#         self.alpha = alpha
-#         self.beta = beta
-#         self.k = k
-#         self.shots = shots
-#
-#     @staticmethod
-#     def _data_to_qubo(features: np.ndarray, labels: np.ndarray, alpha: int = 10, beta: int = 1000,
-#                       k: int = 5) -> np.array:
-#         """
-#         Method for transforming input data to QUBO shape
-#
-#         Args:
-#             features: np.array of features
-#             labels: np.array of target column
-#             alpha: parameter
-#             beta: parameter
-#             k: number of features to be selected
-#
-#         Returns: np.array
-#
-#         """
-#         features = features.astype(float)
-#         labels = labels.astype(float)
-#         B = features.T  # B ... incidence matrix of hypergraph
-#         l = labels  # l ... labels
-#         n = B.shape[0]  # n ... number of features
-#         L = B @ B.T  # L+ ... positive Laplacian matrix, L+ = D + Aw
-#         D = np.diag(np.diag(L))  # D ... degree matrix
-#         Aw = L - D  # Aw ... weighted adjacency matrix
-#         Df = np.diag(B @ l)  # Df ... filtered degree matrix
-#         ub_Aw = np.ones(n) @ Aw @ np.ones(n)  # upper bound
-#         ub_Df = np.ones(n) @ Df @ np.ones(n)  # upper bound
-#         alpha_ub = ub_Aw / ub_Df
-#         alpha = alpha_ub * 1.01  # to make sure (xT Aw x) < alpha (xT Df x)
-#         Qp = Aw - alpha * Df  # Qp ... "problem"
-#         Qc = beta * (np.ones(n) - 2 * k * np.eye(n))  # Qc ... constraints
-#         # Qc ... "constraint". This is a cardinality constraint which is minimal when 1@x==k.
-#         Q = Qp + Qc
-#         return Q
-#
-#     @staticmethod
-#     def _q_to_qp(Q: np.ndarray) -> QuadraticProgram:
-#         """
-#         This method transforms the input matrix Q into a QuadraticProgram
-#
-#         Args:
-#             Q: input matrix
-#
-#         Returns: QuadraticProgram
-#
-#         """
-#         n = Q.shape[0]
-#         qp_name = 'QuanTeam'
-#         linear_terms = {"x" + str(i): x_i for i, x_i in enumerate(np.diag(Q))}
-#         quadratic_terms = {("x" + str(i), "x" + str(j)):
-#                                2 * Q[i, j]
-#                            for i in range(n)
-#                            for j in range(n)
-#                            if i < j}
-#         qp = QuadraticProgram(qp_name)
-#         for i in range(n):
-#             qp.binary_var(name="x" + str(i))
-#
-#         qp.minimize(constant=0, linear=linear_terms, quadratic=quadratic_terms)
-#
-#         return qp
-#
-#     def fit(self, X, y=None):
-#         if y:
-#             q = self._data_to_qubo(features=X.values, labels=y, alpha=self.alpha, beta=self.beta, k=self.k)
-#         else:
-#             q = X.values
-#         self.qp_ = self._q_to_qp(q)
-#         return self
-#
-#     def transform(self, X):
-#         check_is_fitted(self)
-#         return self.qp_

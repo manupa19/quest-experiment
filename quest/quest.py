@@ -18,13 +18,13 @@ from .utils import logger, unmap_bitstring
 _logger = logger(__name__)
 
 
-class BaseQuest(ABC, BaseEstimator, TransformerMixin):
+class BaseQuest(ABC, BaseEstimator, TransformerMixin): #BaseQuest is an abstract base class (abc) for all quest variations and the things in the parantheses are parent calsses
 
     def __init__(self):
-        pass
+        pass #it's left as empty
 
-    @property
-    @abstractmethod
+    @property #Forces subclasses to implement the method as a property (not a function)
+    @abstractmethod #Forces subclasses to implement the method
     def get_selected_features(self):
         pass
 
@@ -56,7 +56,8 @@ class QUEST(BaseQuest):
                  k: int = 5,
                  shots: int = 10000,
                  coeff_cap: float = 0.5,
-                 max_features: int = 100
+                 max_features: int = 100,
+                 scoring_method: str = 'iv' #iv or correlation
                  ):
         """
 
@@ -67,7 +68,7 @@ class QUEST(BaseQuest):
             channel: Channel type. ``ibm_cloud`` or ``ibm_quantum``
             token: IBM Cloud API key or IBM Quantum API token.
             verify: Whether to verify the server's TLS certificate.
-            instance:he service instance to use.
+            instance:the service instance to use.
                 For ``ibm_cloud`` runtime, this is the Cloud Resource Name (CRN) or the service name.
                 For ``ibm_quantum`` runtime, this is the hub/group/project in that format.
             optimizer: Specify the optimizer function
@@ -75,11 +76,11 @@ class QUEST(BaseQuest):
             sampler_options: Parameters of the Sampler primitive
             alpha: Parameter used for defining the QUBO Problem
             beta: Parameter used for defining the QUBO Problem
-            k: influences the number fo features to be selected
+            k: influences the number of features to be selected
             shots: Number of repetitions of each circuit, for sampling. If None, the shots are
                 extracted from the backend. If the backend has none set, the default is 1024.
         """
-        super().__init__()
+        super().__init__() #makes sure the BaseQuest constructor runs before anything else in QUEST
 
         self.backend = backend
         self.channel = channel
@@ -97,10 +98,12 @@ class QUEST(BaseQuest):
 
         self.max_features = max_features
         self.coeff_cap = coeff_cap
+        self.scoring_method = scoring_method
 
-        self.algorithm = QuboTransformer(max_features=max_features, coeff_cap=coeff_cap)
+        self.algorithm = QuboTransformer(max_features=max_features, coeff_cap=coeff_cap, scoring_method=scoring_method)  #
 
-    @staticmethod
+    @staticmethod # Static method → doesn’t use self, just returns the right solver for a QUBO
+# Easy to override in other versions of QUEST
     def get_solver(qp: QuadraticProgram):
         """
         Returns the Solver used; gives access to the Solver's methods
@@ -134,31 +137,53 @@ class QUEST(BaseQuest):
         return self.result
 
     def fit(self, X, y=None):
-
+        print("Starting fit...", flush=True)
         qp = self.algorithm.fit_transform(X, y)
+        print("QUBO created.", flush=True)
+    
         solver = self.get_solver(qp)
+        print("Solver created. Running now...", flush=True)
+    
         self.result = solver.run()
-        _logger.info(f"Results: {self.result}")
+        print("Solver finished. Result obtained.", flush=True)
+    
         bitstring = unmap_bitstring(self.result.best_measurement['bitstring'], solver.ansatz_isa)
+        print("Bitstring unmapped.", flush=True)
+    
         self.feature_list_ = [X.columns[i] for i, e in enumerate(",".join(bitstring).split(',')) if e == '1']
-
-        _logger.info(f"Results best measurement: {self.result.best_measurement}")
-
+        print("Selected features determined.", flush=True)
+    
         _logger.info(f"Selected Features: {self.get_selected_features}")
-
         return self
+
+    # def fit(self, X, y=None):
+
+    #     #Turn the feature selection problem into a QUBO(Quadratic Unconstrained Binary Optimization) using the QuboTransformer. This encodes the dataset and target into an optimization problem format      
+    #     qp = self.algorithm.fit_transform(X, y)
+    #     solver = self.get_solver(qp)
+    #     self.result = solver.run()
+    #     _logger.info(f"Results: {self.result}")
+    #     bitstring = unmap_bitstring(self.result.best_measurement['bitstring'], solver.ansatz_isa)
+    #     self.feature_list_ = [X.columns[i] for i, e in enumerate(",".join(bitstring).split(',')) if e == '1']
+
+    #     _logger.info(f"Results best measurement: {self.result.best_measurement}")
+
+    #     _logger.info(f"Selected Features: {self.get_selected_features}")
+
+    #     return self
 
     def transform(self, X) -> pd.DataFrame:
         _logger.info("Transform Data ...")
         check_is_fitted(self)
-        X = X[self.get_selected_features]
+        X = X[self.get_selected_features] #The output is a new DataFrame with only the best features
         return X
 
 
 class QUESTInspired(QUEST):
 
     def __init__(self,
-                 max_features: int = 100,
+                 max_features: int = 100
+                 ,
                  coeff_cap: float = 0.5
                  ):
         super().__init__(
@@ -179,14 +204,38 @@ class QUESTInspired(QUEST):
         """
         return CplexSolver(qp=qp)
 
+    # def fit(self, X, y=None):
+    #     print("Starting fit...", flush=True)
+    #     qp = self.algorithm.fit_transform(X, y)
+    #     print("QUBO created.", flush=True)
+    
+    #     solver = self.get_solver(qp)
+    #     print("Solver created. Running now...", flush=True)
+    
+    #     self.result = solver.run()
+    #     print("Solver finished. Result obtained.", flush=True)
+    
+    #     bitstring = unmap_bitstring(self.result.best_measurement['bitstring'], solver.ansatz_isa)
+    #     print("Bitstring unmapped.", flush=True)
+    
+    #     self.feature_list_ = [X.columns[i] for i, e in enumerate(",".join(bitstring).split(',')) if e == '1']
+    #     print("Selected features determined.", flush=True)
+    
+    #     _logger.info(f"Selected Features: {self.get_selected_features}")
+    #     return self
+    
     def fit(self, X, y=None):
+        print("Starting fit...", flush=True)
         algo = self.algorithm
         qp = algo.fit_transform(X, y)
+        print("QUBO created.", flush=True)
 
         self.result = self.get_solver(qp).run()
+        print("Solver created. Running now...", flush=True)
         self.feature_list_ = [X.loc[:, algo.pre_selected_features].columns[i] for i, e
                               in enumerate(self.result.variables_dict.values()) if e == 1.0]
-
+        print("Selected features determined.", flush=True)
+        
         _logger.info(f"Results: {self.result}")
 
         _logger.info(f"Selected Features: {self.get_selected_features}")
