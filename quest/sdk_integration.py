@@ -11,6 +11,20 @@ from qiskit_optimization.algorithms import CplexOptimizer
 from qiskit.transpiler.preset_passmanagers import generate_preset_pass_manager
 from qiskit.circuit.library import QAOAAnsatz
 from qiskit_aer import AerSimulator
+from qiskit_optimization.converters import QuadraticProgramToQubo
+from braket.devices import LocalSimulator
+from braket.ahs import (
+    analog_hamiltonian_simulation as ahs,
+    atom_arrangement as aa,
+    driving_field as df,
+)
+from braket.tasks.analog_hamiltonian_simulation_quantum_task_result import (
+    AnalogHamiltonianSimulationQuantumTaskResult,
+)
+from braket.timings.time_series import TimeSeries
+import numpy as np
+from braket.aws import AwsDevice
+
 
 from .utils import logger
 
@@ -169,3 +183,71 @@ class AerSolver(QAOAQiskitSolver):
 
             result.best_measurement['value'] = result.best_measurement['value'] + self.offset
             return result
+
+class QuEraAHSSolver(AbstractSolver):
+    def __init__(self, qp: QuadraticProgram, shots: int = 1000):
+        super().__init__(qp)
+        use_local = True  # toggle this when you're ready
+        self.shots = shots
+        if use_local:
+            self.device = LocalSimulator("braket_ahs")
+        else:
+            self.device = AwsDevice("arn:aws:braket:::device/quantum-simulator/amazon/ahs")
+        self.linear, self.quadratic = self._qp_to_ising()
+        print("Number of variables:", len(self.linear))
+        self.program = self._ising_to_ahs()
+
+
+    def _qp_to_ising(self):
+        qubo = QuadraticProgramToQubo().convert(self.qp)
+        n = qubo.get_num_vars()
+        h, J = {i: 0.0 for i in range(n)}, {}
+        #linear terms
+        for idx, coeff in qubo.objective.linear.to_dict().items():
+            h[idx] += coeff * 0.5
+        #quadratic terms
+        #print(qubo.objective.quadratic.to_dict().items())
+        for (i, j), coeff in qubo.objective.quadratic.to_dict().items():
+            if i == j:
+                h[i] += 0.25 * coeff
+            else:
+                J[(i, j)] = 0.25 * coeff
+        print("this passsed successfully")
+        return h,J
+        
+    def service(self):
+        pass
+
+    def circuit(self):
+        pass
+
+    def _ising_to_ahs(self):
+        n = len(self.linear)
+        min_spacing = 4e-6
+        radius = (n * min_spacing) / (2 * np.pi) * 1.2  # add 20% padding #meters   
+        register = aa.AtomArrangement()
+        
+        for k in range(n):
+            theta = 2 * np.pi * k / n
+            register.add([radius * np.cos(theta), radius * np.sin(theta)])
+            
+        t_max = 4e-6
+        omega_max = 2 * np.pi * 2.5e6 # 15.7 MHz  (inside 25 MHz limit)
+        drive = df.DrivingField(
+            amplitude=TimeSeries().put(0, omega_max).put(t_max, 0),
+            phase=TimeSeries().put(0, 0).put(t_max, 0),
+            detuning=TimeSeries().put(0, -4*omega_max).put(t_max, 4*omega_max)
+        )
+        return ahs.AnalogHamiltonianSimulation(register=register, hamiltonian=drive)
+
+    def run(self) -> "AnalogHamiltonianSimulationQuantumTaskResult":
+        task = self.device.run(self.program, shots=self.shots)
+        result = task.result()
+        measurements = [tuple(shot.post_sequence.tolist()) for shot in result.measurements]
+        from collections import Counter
+        most_common, _ = Counter(measurements).most_common(1)[0]
+
+        variables_dict = {i: float(bit) for i, bit in enumerate(most_common)}
+        result.variables_dict = variables_dict
+
+        return result

@@ -61,7 +61,7 @@ class QuboPreprocessor(BaseEstimator, TransformerMixin):
 
 class QuboTransformer(BaseEstimator, TransformerMixin):
 
-    def __init__(self, coeff_cap: float = 2, max_features: int = 100, scoring_method: str = 'correlation'):
+    def __init__(self, coeff_cap: float = 2, max_features: int = 100, scoring_method: str = 'correlation'): 
         self.coeff_cap = coeff_cap
         self.max_features = max_features
         self.scoring_method = scoring_method  # 'iv' or 'correlation'

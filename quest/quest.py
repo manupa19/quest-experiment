@@ -12,7 +12,7 @@ from qiskit_ibm_runtime.accounts import ChannelType
 from qiskit_optimization import QuadraticProgram
 
 from .transformers import QuboTransformer
-from .sdk_integration import QAOAQiskitSolver, CplexSolver, AerSolver
+from .sdk_integration import QAOAQiskitSolver, CplexSolver, AerSolver, QuEraAHSSolver
 from .utils import logger, unmap_bitstring
 
 _logger = logger(__name__)
@@ -100,7 +100,7 @@ class QUEST(BaseQuest):
         self.coeff_cap = coeff_cap
         self.scoring_method = scoring_method
 
-        self.algorithm = QuboTransformer(max_features=max_features, coeff_cap=coeff_cap, scoring_method=scoring_method)  #
+        self.algorithm = QuboTransformer(max_features=10, coeff_cap=coeff_cap, scoring_method=scoring_method)  #
 
     @staticmethod # Static method → doesn’t use self, just returns the right solver for a QUBO
 # Easy to override in other versions of QUEST
@@ -137,21 +137,21 @@ class QUEST(BaseQuest):
         return self.result
 
     def fit(self, X, y=None):
-        print("Starting fit...", flush=True)
+        # print("Starting fit...", flush=True)
         qp = self.algorithm.fit_transform(X, y)
-        print("QUBO created.", flush=True)
+        # print("QUBO created.", flush=True)
     
         solver = self.get_solver(qp)
-        print("Solver created. Running now...", flush=True)
+        # print("Solver created. Running now...", flush=True)
     
         self.result = solver.run()
-        print("Solver finished. Result obtained.", flush=True)
+        # print("Solver finished. Result obtained.", flush=True)
     
         bitstring = unmap_bitstring(self.result.best_measurement['bitstring'], solver.ansatz_isa)
-        print("Bitstring unmapped.", flush=True)
+        # print("Bitstring unmapped.", flush=True)
     
         self.feature_list_ = [X.columns[i] for i, e in enumerate(",".join(bitstring).split(',')) if e == '1']
-        print("Selected features determined.", flush=True)
+        # print("Selected features determined.", flush=True)
     
         _logger.info(f"Selected Features: {self.get_selected_features}")
         return self
@@ -182,27 +182,32 @@ class QUEST(BaseQuest):
 class QUESTInspired(QUEST):
 
     def __init__(self,
-                 max_features: int = 100
+                 max_features: int = 100 
                  ,
-                 coeff_cap: float = 0.5
+                 coeff_cap: float = 0.5,
+                 method : str = 'ahs' #or qaoa
                  ):
         super().__init__(
                          max_features=max_features,
-                         coeff_cap=coeff_cap)
+                         coeff_cap=coeff_cap
+        )
+        self.method = method
 
 
-    @staticmethod
-    def get_solver(qp: QuadraticProgram):
+    def get_solver(self, qp: QuadraticProgram):
         """
         Returns the Solver used; gives access to the Solver's methods
         Args:
             qp: The QuadraticProgram to be solved
 
         Returns:
-            CplexSolver
+            CplexSolver or QuEraAHSSolver
 
         """
-        return CplexSolver(qp=qp)
+        if self.method.lower() == 'ahs':
+            return QuEraAHSSolver(qp=qp)
+        else:
+            return CplexSolver(qp=qp)
 
     # def fit(self, X, y=None):
     #     print("Starting fit...", flush=True)

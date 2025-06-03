@@ -11,5 +11,5 @@ other:
 quest:
   params:
     coeff_cap: 0.059
-    max_features: 200
+    max_features: 10
 
