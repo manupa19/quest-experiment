@@ -12,7 +12,7 @@ from qiskit_ibm_runtime.accounts import ChannelType
 from qiskit_optimization import QuadraticProgram
 
 from .transformers import QuboTransformer
-from .sdk_integration import QAOAQiskitSolver, CplexSolver, AerSolver, QuEraAHSSolver
+from .sdk_integration import QAOAQiskitSolver, ClassicalSolver, AerSolver, QuEraAHSSolver
 from .utils import logger, unmap_bitstring
 
 _logger = logger(__name__)
@@ -185,7 +185,7 @@ class QUESTInspired(QUEST):
                  max_features: int = 100 
                  ,
                  coeff_cap: float = 0.5,
-                 method : str = 'ahs' #or qaoa
+                 method : str = 'classical' # ahs or qaoa or classical
                  ):
         super().__init__(
                          max_features=max_features,
@@ -201,13 +201,15 @@ class QUESTInspired(QUEST):
             qp: The QuadraticProgram to be solved
 
         Returns:
-            CplexSolver or QuEraAHSSolver
+            ClassicalSolver or QuEraAHSSolver or QAOA (it's not running tho)
 
         """
         if self.method.lower() == 'ahs':
             return QuEraAHSSolver(qp=qp)
-        else:
-            return CplexSolver(qp=qp)
+        elif self.method.lower() == 'qaoa':
+            return QAOAQiskitSolver(qp=qp)
+        elif self.method.lower() == 'classical':
+            return ClassicalSolver(qp=qp, solver = 'gurobi')
 
     # def fit(self, X, y=None):
     #     print("Starting fit...", flush=True)

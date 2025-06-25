@@ -24,7 +24,7 @@ from braket.tasks.analog_hamiltonian_simulation_quantum_task_result import (
 from braket.timings.time_series import TimeSeries
 import numpy as np
 from braket.aws import AwsDevice
-
+from qiskit_optimization.algorithms import GurobiOptimizer
 
 from .utils import logger
 
@@ -132,11 +132,12 @@ class QAOAQiskitSolver(AbstractSolver):
             return result
 
 
-class CplexSolver(AbstractSolver):
+class ClassicalSolver(AbstractSolver):
 
-    def __init__(self, qp: QuadraticProgram):
+    def __init__(self, qp: QuadraticProgram, solver = 'gurobi'):
         super().__init__(qp)
-
+        self.solver = solver
+        
     def service(self):
         pass
 
@@ -144,16 +145,16 @@ class CplexSolver(AbstractSolver):
         pass
         
     def run(self):
-        print("Starting CPLEX solve...", flush=True)
-        cplex = CplexOptimizer()
+        print(f"Running classical solver: {self.solver}" , flush = True)
+        if self.solver == 'gurobi':
+            optimizer = GurobiOptimizer()
+        elif self.solver == "cplex":
+            optimizer = CplexOptimizer()
+        result = optimizer.solve(self.qp)
 
-        result = cplex.solve(self.qp)
-        print("CPLEX solve finished.", flush=True)
+        print("Classical solve finished.", flush=True)
         return result
 
-    # def run(self):
-    #     cplex = CplexOptimizer()
-    #     return cplex.solve(self.qp)
 
 
 class AerSolver(QAOAQiskitSolver):
